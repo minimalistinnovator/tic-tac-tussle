@@ -15,9 +15,10 @@ thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
-rdkafka = { workspace = true }
+uuid = { workspace = true }
+store = { workspace = true }
 renet = { version = "^2.0.0" }
 renet_netcode = { version = "^2.0.0" }
 crossbeam-channel = { version = "^0.5.15" }
-uuid = { version = "1.23.0", features = ["v4"] }
-store = { workspace = true }
+rdkafka = { version = "^0.39.0", features = ["cmake-build", "ssl"] }
+bytes = { version = "^1.11.1" }

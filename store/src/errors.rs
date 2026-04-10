@@ -1,32 +1,18 @@
-//! Domain errors for the store crate
+use crate::state::{PlayerId, Stage};
 use thiserror::Error;
 
-#[derive(Error, Debug)]
-pub enum StoreError {
-    #[error("Event validation failed: {reason}")]
-    InvalidEvent { reason: String },
-
-    #[error(
-        "Game is not in the expected stage: \
-    (expected: {expected:?}, actual: {actual:?})"
-    )]
-    WrongStage { expected: String, actual: String },
-    #[error("Player {player_id} is not in the game")]
-    UnknownPlayer { player_id: u64 },
-    #[error("Tile index {index} is out of bounds (max: 8)")]
-    TileOutOfBounds { index: usize },
-    #[error("Tile index {index} is already occupied")]
-    TileOccupied { index: usize },
-    #[error("It is not the player ({player_id})'s turn")]
-    NotYourTurn { player_id: u64 },
-    #[error("Serialization error: {0}")]
-    Serialization(#[from] bincode_next::error::EncodeError),
-    #[error("De-serialization error: {0}")]
-    DeSerialization(#[from] bincode_next::error::DecodeError),
-    #[error("Replay error at event #{seq}: {source}")]
-    ReplayFailed {
-        seq: usize,
-        #[source]
-        source: Box<StoreError>,
-    },
+#[derive(Debug, Error)]
+pub enum TicTacTussleError {
+    #[error("expected stage {expected:?}, actual {actual:?}")]
+    WrongStage { expected: Stage, actual: Stage },
+    #[error("player {0} is not in this game")]
+    UnknownPlayer(PlayerId),
+    #[error("player {0} has already joined")]
+    AlreadyJoined(PlayerId),
+    #[error("tile index {0} is out of range (0-8)")]
+    TileOutOfRange(usize),
+    #[error("tile {0} is already occupied")]
+    TileOccupied(usize),
+    #[error("it is not player {0}'s turn")]
+    NotYourTurn(PlayerId),
 }
