@@ -20,6 +20,7 @@ renet = { version = "^2.0.0" }
 renet_netcode = { version = "^2.0.0" }
 crossbeam-channel = { version = "^0.5.15" }
 chrono = { version = "^0.4.44", features = ["serde"] }
+bevy = { version = "^0.18.1" }
 store = { path = "store" }
 
 [workspace.lints.clippy]

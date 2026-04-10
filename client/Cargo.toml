@@ -3,10 +3,19 @@ name = "client"
 version = "0.0.1"
 edition = "2021"
 
+[[bin]]
+name = "client"
+path = "src/main.rs"
+
 [dependencies]
-store = { path = "../store" }
-anyhow = "1.0"
-bevy = { version = "0.18.1", features = ["dynamic_linking"] }
-renet = "2.0.0"
-bevy_renet = "4.0.1"
 bincode-next = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+renet = { workspace = true }
+renet_netcode = { workspace = true }
+store = { workspace = true }
+bevy = { version = "^0.18.1", default-features = true }
+bevy_renet = { version = "^4.0.1" }
+bevy_ecs = { version = "^0.18.1" }
