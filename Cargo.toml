@@ -1,8 +1,40 @@
 [workspace]
-resolver="2"
+resolver = "2"
 
 members = [
-  "client",
-  "server",
-  "store"
+    "client",
+    "server",
+    "store"
 ]
+
+[workspace.dependencies]
+serde = { version = "^1.0.228", features = ["derive"] }
+bincode-next = { version = "2.1.0", features = ["serde"] }
+anyhow = { version = "^1.0.102" }
+thiserror = { version = "^2.0.18" }
+tokio = { version = "^1.51.1", features = ["full"] }
+tracing = { version = "^0.1.44" }
+tracing-subscriber = { version = "^0.3.23", features = ["env-filter", "fmt"] }
+rdkafka = { version = "^0.39.0", features = ["cmake-build", "ssl"] }
+renet = { version = "^2.0.0" }
+renet_netcode = { version = "^2.0.0" }
+store = { path = "store" }
+
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+needless_pass_by_value = "deny"
+unwrap_used = "deny"
+expect_used = "deny"
+cognitive_complexity = "warn"
+type_complexity = "warn"
+too_many_arguments = "warn"
+module_inception = "warn"
+module_name_repetitions = "allow"
+
+[workspace.lints.rust]
+missing_docs = "warn"
+missing_debug_implementations = "deny"
+unsafe_code = "deny"
+unused_qualifications = "warn"
+variant_size_differences = "warn"

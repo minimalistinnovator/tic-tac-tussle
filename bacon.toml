@@ -1,0 +1,72 @@
+#:schema https://dystroy.org/bacon/.bacon.schema.json
+
+default_job = "check"
+env.CARGO_TERM_COLOR = "always"
+
+[jobs.check]
+command = ["cargo", "check", "--workspace"]
+need_stdout = false
+
+[jobs.check-all]
+command = ["cargo", "check", "--workspace", "--all-targets"]
+need_stdout = false
+
+[jobs.clippy]
+command = ["cargo", "clippy", "--workspace"]
+need_stdout = false
+
+[jobs.clippy-all]
+command = ["cargo", "clippy", "--workspace", "--all-targets"]
+need_stdout = false
+
+[jobs.pedantic]
+command = [
+    "cargo", "clippy",
+    "--workspace",
+    "--",
+    "-W", "clippy::pedantic",
+]
+need_stdout = false
+
+[jobs.test]
+command = ["cargo", "test", "--workspace"]
+need_stdout = true
+
+[jobs.nextest]
+command = [
+    "cargo", "nextest", "run", "--workspace",
+    "--hide-progress-bar", "--failure-output", "final"
+]
+need_stdout = true
+analyzer = "nextest"
+
+[jobs.doc]
+command = ["cargo", "doc", "--no-deps", "--workspace"]
+need_stdout = false
+
+[jobs.doc-open]
+command = ["cargo", "doc", "--no-deps", "--workspace", "--open"]
+need_stdout = false
+on_success = "back"
+
+[jobs.run]
+command = ["cargo", "run", "-p", "cli_app"]
+need_stdout = true
+allow_warnings = true
+background = true
+
+[jobs.run-long]
+command = ["cargo", "run", "-p", "cli_app"]
+need_stdout = true
+allow_warnings = true
+background = false
+on_change_strategy = "kill_then_restart"
+
+[jobs.ex]
+command = ["cargo", "run", "--workspace", "--example"]
+need_stdout = true
+allow_warnings = true
+
+[keybindings]
+c = "job:clippy-all"
+p = "job:pedantic"

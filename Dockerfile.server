@@ -1,0 +1,16 @@
+FROM rust:bookworm AS builder
+RUN apt-get update && apt-get install -y cmake libssl-dev libsasl2-dev pkg-config clang \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+COPY . .
+RUN cargo build --release --bin server
+
+FROM debian:bookworm-slim AS runtime
+RUN apt-get update && apt-get install -y libssl3 libsasl2-2 ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+COPY --from=builder /app/target/release/server /app/server
+ENV KAFKA_BROKERS=localhost:19092
+ENV RUST_LOG=server=info,store=info,rdkafka=warn
+EXPOSE 5000/udp
+ENTRYPOINT ["/app/server"]
