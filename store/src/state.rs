@@ -1,7 +1,6 @@
 //! Write-model game state — NO history field.
 //! Contains only what GameDecider needs to validate the next command.
 
-use bevy::prelude::Resource;
 use bincode_next::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -105,7 +104,7 @@ impl PlayerPair {
 // ── GameState ─────────────────────────────────────────────────────────────────
 
 /// Board layout (row-major):  0|1|2 / 3|4|5 / 6|7|8
-#[derive(Debug, Clone, Default, Encode, Decode, Resource)]
+#[derive(Debug, Clone, Default, Encode, Decode)]
 pub struct GameState {
     pub stage: Stage,
     pub board: [Tile; 9],

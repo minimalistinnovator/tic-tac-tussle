@@ -71,6 +71,7 @@ fn main() -> Result<()> {
         .unwrap_or_else(|| "127.0.0.1:5000".into());
 
     let mut app = App::new();
+    app.insert_resource(Username(username.clone()));
     app.add_plugins(DefaultPlugins.set(WindowPlugin {
         primary_window: Some(Window {
             title: format!("TicTacToe — {username}"),
@@ -180,9 +181,24 @@ fn setup(mut commands: Commands) {
 
 // ── Systems ───────────────────────────────────────────────────────────────────
 
-fn set_local_player_id(transport: Res<NetcodeClientTransport>, mut local: ResMut<LocalPlayerId>) {
+fn set_local_player_id(
+    transport: Res<NetcodeClientTransport>,
+    mut local: ResMut<LocalPlayerId>,
+    mut client: ResMut<RenetClient>,
+    username: Res<Username>,
+) {
     if local.0.is_none() {
-        local.0 = Some(PlayerId(transport.client_id()));
+        let id = transport.client_id();
+        local.0 = Some(PlayerId(id));
+
+        // Join game immediately on connection
+        let cmd = GameCommand::JoinGame {
+            player_id: PlayerId(id),
+            name: username.0.clone(),
+        };
+        let bytes = encode_to_vec(&cmd, config::standard()).expect("encode join");
+        client.send_message(DefaultChannel::ReliableOrdered, bytes);
+        info!("Sent JoinGame for {}", username.0);
     }
 }
 
@@ -230,6 +246,9 @@ fn update_pair(received: Res<ReceivedEvents>, mut pair: ResMut<MaybePair>) {
         ));
     }
 }
+
+#[derive(Resource)]
+struct Username(String);
 
 /// Mouse click → PlaceTile command → server.
 fn handle_input(

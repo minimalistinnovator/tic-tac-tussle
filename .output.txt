@@ -1,0 +1,645 @@
+diff --git a/Dockerfile.server b/Dockerfile.server
+index 004cc7f..ef39d32 100644
+--- a/Dockerfile.server
++++ b/Dockerfile.server
+@@ -1,5 +1,6 @@
+ FROM rust:bookworm AS builder
+ RUN apt-get update && apt-get install -y cmake libssl-dev libsasl2-dev pkg-config clang \
++    libwayland-dev libx11-dev libasound2-dev libudev-dev \
+     && rm -rf /var/lib/apt/lists/*
+ WORKDIR /app
+ COPY . .
+diff --git a/README.md b/README.md
+index a57eff2..ef3be88 100644
+--- a/README.md
++++ b/README.md
+@@ -1,2 +1,181 @@
+-# tic-tac-tussle
+-A small online tic tac toe game written in rust for a tutorial series
++# Tic-Tac-Tussle
++
++A small online tic-tac-toe game written in Rust, featuring a Redpanda-backed event store
++and UDP-based networking.
++
++## Prerequisites
++
++```bash
++# Verify these are installed
++docker --version          # Docker 24+
++docker compose version    # v2 plugin (not docker-compose v1)
++cargo --version           # Rust 1.77+
++rustup show               # should show stable toolchain
++```
++
++---
++
++## Step 1 — Clone and Enter
++
++```bash
++git clone https://github.com/minimalistinnovator/tic-tac-tussle.git
++cd tic-tac-tussle
++```
++
++---
++
++## Step 2 — Start Redpanda + Server via Docker
++
++```bash
++# First time — build the server image and start everything
++docker compose up --build
++
++# Subsequent runs (no code changes)
++docker compose up
++
++# Run detached (background)
++docker compose up --build -d
++```
++
++This starts three containers:
++
++- `ttt-redpanda` — Redpanda broker on `:19092` (external) / `:9092` (internal)
++- `ttt-console`  — Redpanda Console UI on `:8080`
++- `ttt-server`   — your game server on UDP `:5000`
++
++**Wait for this line before starting clients:**
++
++```
++ttt-server  | INFO server: UDP listening on 0.0.0.0:5000
++```
++
++---
++
++## Step 3 — Start the Clients (Two Separate Terminals)
++
++```bash
++# Terminal 1 — Player Alice
++RUST_LOG=client=debug cargo run --bin client -- Alice 127.0.0.1:5000
++
++# Terminal 2 — Player Bob
++RUST_LOG=client=debug cargo run --bin client -- Bob 127.0.0.1:5000
++```
++
++The server auto-starts the game the moment both clients connect.
++
++---
++
++## Step 4 — Monitor Redpanda Console (UI)
++
++```bash
++open http://localhost:8080        # macOS
++xdg-open http://localhost:8080    # Linux
++# Windows: just paste into browser
++```
++
++Inside the Console:
++
++| Where                        | What you'll see                                                                                             |
++|------------------------------|-------------------------------------------------------------------------------------------------------------|
++| **Topics → `game-events`**   | Every `GameEventEnvelope` published — full message bytes, key (`game_id/seq`), partition, offset, timestamp |
++| **Topics → `game-commands`** | Commands injected from external consumers                                                                   |
++| **Consumer Groups**          | `game-server-loop` and `game-audit-log` lag and offset positions                                            |
++| **Overview**                 | Broker health, throughput                                                                                   |
++
++Click a message → **Deserialize as** → select `Binary` to see raw bytes (they're
++`bincode` — not human-readable in the UI, but offset/key/timing are all visible).
++
++---
++
++## Step 5 — Monitor Logs
++
++```bash
++# All containers live
++docker compose logs -f
++
++# Just the server
++docker compose logs -f server
++
++# Just Redpanda
++docker compose logs -f redpanda
++
++# Server logs with timestamps
++docker compose logs -f --timestamps server
++```
++
++The server emits structured `tracing` logs. Key lines to watch:
++
++```
++INFO  server: UDP listening on 0.0.0.0:5000
++INFO  server: connected client_id=1 name="Alice"
++INFO  server: connected client_id=2 name="Bob"
++TRACE store::decider: command accepted cmd=JoinGame produced=2
++INFO  server: broadcasted event=GameStarted
++TRACE store::store: batch-appended seq=0
++TRACE store::store: batch-appended seq=1
++INFO  adapters::redpanda: published seq=0 partition=0 offset=0
++```
++
++---
++
++## Step 6 — Inspect Redpanda via CLI (inside container)
++
++```bash
++# Shell into the Redpanda container
++docker exec -it ttt-redpanda bash
++
++# List topics
++rpk topic list
++
++# Consume game-events topic from beginning (raw — bincode bytes shown as hex)
++rpk topic consume game-events --from-start
++
++# Describe consumer group lag
++rpk group describe game-server-loop
++rpk group describe game-audit-log
++
++# Topic metadata
++rpk topic describe game-events
++```
++
++---
++
++## Step 7 — Run Domain Tests (Zero Infrastructure)
++
++```bash
++# Pure domain — no Docker, no broker, no UDP needed
++cargo test -p store
++
++# Verbose output
++cargo test -p store -- --nocapture
++
++# Specific test
++cargo test -p store decider::tests::win_ends_game -- --nocapture
++```
++
++---
++
++## Tear Down
++
++```bash
++# Stop containers, keep volumes (Redpanda data persists)
++docker compose down
++
++# Stop AND wipe all Redpanda data (clean slate)
++docker compose down -v
++```
++
++---
++
++## Quick Reference Card
++
++```
++docker compose up --build -d          ← start everything
++open http://localhost:8080             ← Redpanda Console
++docker compose logs -f server          ← server logs
++cargo run --bin client -- Alice 127.0.0.1:5000   ← client 1
++cargo run --bin client -- Bob   127.0.0.1:5000   ← client 2
++cargo test -p store                    ← domain tests
++docker exec -it ttt-redpanda rpk topic consume game-events --from-start  ← raw events
++docker compose down -v                 ← full teardown
++```
+diff --git a/client/src/main.rs b/client/src/main.rs
+index 233899d..e9f6c01 100644
+--- a/client/src/main.rs
++++ b/client/src/main.rs
+@@ -71,6 +71,7 @@ fn main() -> Result<()> {
+         .unwrap_or_else(|| "127.0.0.1:5000".into());
+
+     let mut app = App::new();
++    app.insert_resource(Username(username.clone()));
+     app.add_plugins(DefaultPlugins.set(WindowPlugin {
+         primary_window: Some(Window {
+             title: format!("TicTacToe — {username}"),
+@@ -180,9 +181,24 @@ fn setup(mut commands: Commands) {
+
+ // ── Systems ───────────────────────────────────────────────────────────────────
+
+-fn set_local_player_id(transport: Res<NetcodeClientTransport>, mut local: ResMut<LocalPlayerId>) {
++fn set_local_player_id(
++    transport: Res<NetcodeClientTransport>,
++    mut local: ResMut<LocalPlayerId>,
++    mut client: ResMut<RenetClient>,
++    username: Res<Username>,
++) {
+     if local.0.is_none() {
+-        local.0 = Some(PlayerId(transport.client_id()));
++        let id = transport.client_id();
++        local.0 = Some(PlayerId(id));
++
++        // Join game immediately on connection
++        let cmd = GameCommand::JoinGame {
++            player_id: PlayerId(id),
++            name: username.0.clone(),
++        };
++        let bytes = encode_to_vec(&cmd, config::standard()).expect("encode join");
++        client.send_message(DefaultChannel::ReliableOrdered, bytes);
++        info!("Sent JoinGame for {}", username.0);
+     }
+ }
+
+@@ -231,6 +247,9 @@ fn update_pair(received: Res<ReceivedEvents>, mut pair: ResMut<MaybePair>) {
+     }
+ }
+
++#[derive(Resource)]
++struct Username(String);
++
+ /// Mouse click → PlaceTile command → server.
+ fn handle_input(
+     windows: Query<&Window>,
+diff --git a/docker-compose.yml b/docker-compose.yml
+index 17f98d9..a6dbbf1 100644
+--- a/docker-compose.yml
++++ b/docker-compose.yml
+@@ -11,13 +11,14 @@ services:
+       - --memory=512M
+       - --overprovisioned
+       - --node-id=0
++      - --check=false
+       - --kafka-addr=internal://0.0.0.0:9092,external://0.0.0.0:19092
+       - --advertise-kafka-addr=internal://redpanda:9092,external://localhost:19092
+       - --pandaproxy-addr=internal://0.0.0.0:8082,external://0.0.0.0:18082
+       - --advertise-pandaproxy-addr=internal://redpanda:8082,external://localhost:18082
+       - --schema-registry-addr=internal://0.0.0.0:8081,external://0.0.0.0:18081
+-      - --advertise-schema-registry-addr=internal://redpanda:8081,external://localhost:18081
+-      - --set=auto_create_topics_enabled=true
++      - --set
++      - auto_create_topics_enabled=true
+     ports:
+       - "19092:19092"
+       - "18081:18081"
+@@ -41,17 +42,9 @@ services:
+     ports:
+       - "8080:8080"
+     environment:
+-      CONFIG_FILEPATH: /tmp/config.yml
+-      CONSOLE_CONFIG_FILE: |
+-        kafka:
+-          brokers: ["redpanda:9092"]
+-        schemaRegistry:
+-          enabled: true
+-          urls: ["http://redpanda:8081"]
+-        redpanda:
+-          adminApi:
+-            enabled: true
+-            urls: ["http://redpanda:9644"]
++      CONFIG_FILEPATH: /etc/redpanda/console-config.yml
++    volumes:
++      - ./console-config.yml:/etc/redpanda/console-config.yml
+     depends_on:
+       redpanda:
+         condition: service_healthy
+diff --git a/server/src/game_service.rs b/server/src/game_service.rs
+index e69de29..b7f30cf 100644
+--- a/server/src/game_service.rs
++++ b/server/src/game_service.rs
+@@ -0,0 +1,109 @@
++//! GameService — application-layer orchestrator.
++//!
++//! Wires: GameDecider (pure) + EventStore + EventPublisher + NetworkBroadcaster.
++//!
++//! Type-state Builder: every required field must be provided at compile time.
++
++use anyhow::{Context, Result};
++use store::store::EventStore;
++use store::{EventPublisher, GameCommand, GameDecider, NetworkBroadcaster};
++use tracing::{debug, info, warn};
++
++pub struct GameService {
++    store: EventStore,
++    publisher: Box<dyn EventPublisher>,
++    broadcaster: Box<dyn NetworkBroadcaster>,
++}
++
++impl GameService {
++    pub fn builder() -> Builder<(), (), ()> {
++        Builder {
++            store: (),
++            publisher: (),
++            broadcaster: (),
++        }
++    }
++
++    /// Hydrate state → decide → append → publish → broadcast.
++    pub fn handle(&mut self, cmd: &GameCommand) -> Result<()> {
++        let state = GameDecider::hydrate(&self.store.events());
++        let events = GameDecider::decide(&state, cmd).map_err(|e| anyhow::anyhow!("{e}"))?;
++
++        debug!(?cmd, produced = events.len(), "command accepted");
++
++        let envelopes = self.store.append_batch(events.clone());
++
++        if let Err(e) = self.publisher.publish_batch(envelopes) {
++            warn!(%e, "broker publish failed (non-fatal)");
++        }
++
++        for event in &events {
++            self.broadcaster.broadcast(event).context("broadcast")?;
++            info!(?event, "broadcasted");
++        }
++        Ok(())
++    }
++
++    /// Send full event history to a newly connected client.
++    pub fn catch_up(&self, client_id: u64) -> Result<()> {
++        for env in self.store.snapshot() {
++            self.broadcaster
++                .send_to(client_id, &env.event)
++                .context("catch-up send_to")?;
++        }
++        debug!(%client_id, n = self.store.len(), "catch-up complete");
++        Ok(())
++    }
++}
++
++// ── Type-state Builder ────────────────────────────────────────────────────────
++pub struct Builder<S, P, B> {
++    store: S,
++    publisher: P,
++    broadcaster: B,
++}
++
++impl<P, B> Builder<(), P, B> {
++    pub fn store(self, s: EventStore) -> Builder<EventStore, P, B> {
++        Builder {
++            store: s,
++            publisher: self.publisher,
++            broadcaster: self.broadcaster,
++        }
++    }
++}
++impl<S, B> Builder<S, (), B> {
++    pub fn publisher(
++        self,
++        p: impl EventPublisher + 'static,
++    ) -> Builder<S, Box<dyn EventPublisher>, B> {
++        Builder {
++            store: self.store,
++            publisher: Box::new(p),
++            broadcaster: self.broadcaster,
++        }
++    }
++}
++
++impl<S, P> Builder<S, P, ()> {
++    pub fn broadcaster(
++        self,
++        b: impl NetworkBroadcaster + 'static,
++    ) -> Builder<S, P, Box<dyn NetworkBroadcaster>> {
++        Builder {
++            store: self.store,
++            publisher: self.publisher,
++            broadcaster: Box::new(b),
++        }
++    }
++}
++
++impl Builder<EventStore, Box<dyn EventPublisher>, Box<dyn NetworkBroadcaster>> {
++    pub fn build(self) -> GameService {
++        GameService {
++            store: self.store,
++            publisher: self.publisher,
++            broadcaster: self.broadcaster,
++        }
++    }
++}
+diff --git a/server/src/main.rs b/server/src/main.rs
+index 404f939..af0fae0 100644
+--- a/server/src/main.rs
++++ b/server/src/main.rs
+@@ -1,5 +1,200 @@
+-pub mod adapters;
++//! TicTacToe game server — 20 Hz game loop.
++//!
++//! Each tick:
++//!   1. Advance renet clocks; pump UDP.
++//!   2. Handle connect / disconnect.
++//!   3. Drain client GameCommands.
++//!   4. Drain broker GameCommands (parallel consumer groups).
++//!   5. Flush outbound UDP.
+
+-fn main() {
+-    println!("Hello, server!");
++use crate::adapters::redpanda::{
++    spawn_parallel_consumers, BrokerCommand, BrokerConfig, RedpandaPublisher,
++};
++use crate::adapters::renet::RenetBroadcaster;
++use crate::game_service::GameService;
++use anyhow::{Context, Result};
++use bincode_next::{config, decode_from_slice};
++use crossbeam_channel::{bounded, Receiver, TryRecvError};
++use renet::{ConnectionConfig, DefaultChannel, RenetServer, ServerEvent};
++use renet_netcode::{
++    NetcodeServerTransport, ServerAuthentication, ServerConfig, NETCODE_USER_DATA_BYTES,
++};
++use std::net::{SocketAddr, UdpSocket};
++use std::sync::{Arc, Mutex};
++use std::time::{Duration, Instant, SystemTime};
++use store::store::EventStore;
++use store::{GameCommand, GameId, PlayerId};
++use tracing::{info, warn};
++
++mod adapters;
++mod game_service;
++
++const PROTOCOL_ID: u64 = 0x5469_6354_6163;
++const MAX_CLIENTS: usize = 2;
++const TICK: Duration = Duration::from_millis(50);
++
++fn main() -> Result<()> {
++    tracing_subscriber::fmt()
++        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
++        .init();
++
++    info!("TicTacToe server starting");
++
++    let kafka_brokers = std::env::var("KAFKA_BROKERS").unwrap_or_else(|_| "localhost:19092".into());
++
++    let broker_cfg = BrokerConfig {
++        brokers: kafka_brokers,
++        events_topic: "game-events".into(),
++        commands_topic: "game-commands".into(),
++    };
++
++    let addr: SocketAddr = "0.0.0.0:5000".parse()?;
++    let socket = UdpSocket::bind(addr).context("bind UDP")?;
++    let now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH)?;
++
++    let renet = Arc::new(Mutex::new(RenetServer::new(ConnectionConfig::default())));
++
++    let mut transport = NetcodeServerTransport::new(
++        ServerConfig {
++            current_time: now,
++            max_clients: MAX_CLIENTS,
++            protocol_id: PROTOCOL_ID,
++            public_addresses: vec![addr],
++            authentication: ServerAuthentication::Unsecure,
++        },
++        socket,
++    )
++    .context("NetcodeServerTransport")?;
++
++    info!("UDP listening on {addr}");
++
++    let publisher = RedpandaPublisher::new(&broker_cfg)?;
++    let broadcaster = RenetBroadcaster::new(Arc::clone(&renet));
++
++    let mut service = GameService::builder()
++        .store(EventStore::new(GameId::new()))
++        .publisher(publisher)
++        .broadcaster(broadcaster)
++        .build();
++
++    let (cmd_tx, cmd_rx) = bounded::<BrokerCommand>(256);
++    spawn_parallel_consumers(broker_cfg, cmd_tx);
++
++    let mut last = Instant::now();
++    loop {
++        let tick_start = Instant::now();
++        let delta = tick_start - last;
++        last = tick_start;
++
++        {
++            let mut srv = renet.lock().expect("renet poisoned");
++            srv.update(delta);
++            transport
++                .update(delta, &mut *srv)
++                .context("transport update")?;
++        }
++
++        handle_connections(&renet, &mut transport, &mut service);
++        drain_client_commands(&renet, &mut service);
++        drain_broker_commands(&cmd_rx, &mut service);
++
++        {
++            let mut srv = renet.lock().expect("renet poisoned");
++            transport.send_packets(&mut *srv);
++        }
++
++        let elapsed = tick_start.elapsed();
++        if elapsed < TICK {
++            std::thread::sleep(TICK - elapsed);
++        }
++    }
++}
++
++// ── Game loop steps ───────────────────────────────────────────────────────────
++
++fn handle_connections(
++    renet: &Arc<Mutex<RenetServer>>,
++    transport: &mut NetcodeServerTransport,
++    service: &mut GameService,
++) {
++    let events: Vec<ServerEvent> = {
++        let mut srv = renet.lock().expect("poisoned");
++        std::iter::from_fn(|| srv.get_event()).collect()
++    };
++    for ev in events {
++        match ev {
++            ServerEvent::ClientConnected { client_id } => {
++                let name = transport
++                    .user_data(client_id)
++                    .map(|ud| name_from_user_data(&ud))
++                    .unwrap_or_else(|| format!("Player-{client_id}"));
++                info!(%client_id, %name, "connected");
++                if let Err(e) = service.catch_up(client_id) {
++                    warn!(%e, "catch-up failed");
++                }
++                let cmd = GameCommand::JoinGame {
++                    player_id: PlayerId(client_id),
++                    name,
++                };
++                if let Err(e) = service.handle(&cmd) {
++                    warn!(%e, "JoinGame rejected");
++                }
++            }
++            ServerEvent::ClientDisconnected { client_id, reason } => {
++                info!(%client_id, %reason, "disconnected");
++                let cmd = GameCommand::LeaveGame {
++                    player_id: PlayerId(client_id),
++                };
++                if let Err(e) = service.handle(&cmd) {
++                    warn!(%e, "LeaveGame rejected");
++                }
++            }
++        }
++    }
++}
++fn drain_client_commands(renet: &Arc<Mutex<RenetServer>>, service: &mut GameService) {
++    let messages: Vec<(u64, bytes::Bytes)> = {
++        let mut srv = renet.lock().expect("poisoned");
++        let ids: Vec<u64> = srv.clients_id().into_iter().collect();
++        let mut msgs = Vec::new();
++        for id in ids {
++            while let Some(b) = srv.receive_message(id, DefaultChannel::ReliableOrdered) {
++                msgs.push((id, b));
++            }
++        }
++        msgs
++    };
++    for (cid, raw) in messages {
++        match decode_from_slice::<GameCommand, _>(&raw, config::standard()) {
++            Ok((cmd, _)) => {
++                if let Err(e) = service.handle(&cmd) {
++                    warn!(%cid, %e, "command rejected");
++                }
++            }
++            Err(e) => warn!(%cid, %e, "decode error"),
++        }
++    }
++}
++fn drain_broker_commands(cmd_rx: &Receiver<BrokerCommand>, service: &mut GameService) {
++    loop {
++        match cmd_rx.try_recv() {
++            Ok(BrokerCommand(cmd)) => {
++                if let Err(e) = service.handle(&cmd) {
++                    warn!(%e, "broker command rejected");
++                }
++            }
++            Err(TryRecvError::Empty) => break,
++            Err(TryRecvError::Disconnected) => {
++                warn!("broker channel closed");
++                break;
++            }
++        }
++    }
++}
++
++// ── Helpers ───────────────────────────────────────────────────────────────────
++fn name_from_user_data(ud: &[u8; NETCODE_USER_DATA_BYTES]) -> String {
++    let len = u64::from_le_bytes(ud[..8].try_into().unwrap()) as usize;
++    let len = len.min(NETCODE_USER_DATA_BYTES - 8);
++    String::from_utf8_lossy(&ud[8..8 + len]).into_owned()
+ }
+diff --git a/store/Cargo.toml b/store/Cargo.toml
+index 3de897c..ff70d41 100644
+--- a/store/Cargo.toml
++++ b/store/Cargo.toml
+@@ -10,5 +10,4 @@ anyhow = { workspace = true }
+ thiserror = { workspace = true }
+ tracing = { workspace = true }
+ uuid = { workspace = true }
+-chrono = { workspace = true }
+-bevy = { workspace = true }
++chrono = { workspace = true }
+\ No newline at end of file
+diff --git a/store/src/state.rs b/store/src/state.rs
+index 37afda2..3294ced 100644
+--- a/store/src/state.rs
++++ b/store/src/state.rs
+@@ -1,7 +1,6 @@
+ //! Write-model game state — NO history field.
+ //! Contains only what GameDecider needs to validate the next command.
+
+-use bevy::prelude::Resource;
+ use bincode_next::{Decode, Encode};
+ use serde::{Deserialize, Serialize};
+ use uuid::Uuid;
+@@ -105,7 +104,7 @@ impl PlayerPair {
+ // ── GameState ─────────────────────────────────────────────────────────────────
+
+ /// Board layout (row-major):  0|1|2 / 3|4|5 / 6|7|8
+-#[derive(Debug, Clone, Default, Encode, Decode, Resource)]
++#[derive(Debug, Clone, Default, Encode, Decode)]
+ pub struct GameState {
+     pub stage: Stage,
+     pub board: [Tile; 9],
