@@ -1,4 +1,4 @@
-use crate::state::PlayerId;
+use crate::state::{GameId, PlayerId};
 use bincode_next::{Decode, Encode};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -14,14 +14,16 @@ pub enum GameCommand {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CommandEnvelope {
     pub id: Uuid,
+    pub game_id: GameId,
     pub occurred_at: DateTime<Utc>,
     pub command: GameCommand,
 }
 
 impl CommandEnvelope {
-    pub fn new(command: GameCommand) -> Self {
+    pub fn new(game_id: GameId, command: GameCommand) -> Self {
         Self {
             id: Uuid::new_v4(),
+            game_id,
             occurred_at: Utc::now(),
             command,
         }

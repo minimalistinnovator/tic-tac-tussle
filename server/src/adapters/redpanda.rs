@@ -34,7 +34,7 @@ use rdkafka::consumer::{
 use rdkafka::error::KafkaResult;
 use rdkafka::message::Message;
 use rdkafka::producer::{FutureProducer, FutureRecord};
-use store::{AckHandle, BrokerMessage, EventPublisher, GameCommand};
+use store::{AckHandle, BrokerMessage, CommandEnvelope, EventPublisher};
 use tokio::runtime::Runtime;
 use tracing::{debug, error, info, warn};
 
@@ -52,7 +52,7 @@ pub struct BrokerConfig {
 }
 
 pub struct BrokerCommand {
-    pub game_command: GameCommand,
+    pub command_envelope: CommandEnvelope,
     pub ack: AckHandle,
 }
 
@@ -201,21 +201,20 @@ async fn consumer_loop(cfg: BrokerConfig, group: String, cmd_tx: Sender<BrokerCo
                         .map(|start| &payload[start..])
                         .unwrap_or(payload);
 
-                    let cmd_res = if trimmed.starts_with(b"{") || trimmed.starts_with(b"[") {
-                        serde_json::from_slice::<GameCommand>(trimmed)
+                    let cmd_res: Result<CommandEnvelope> = if trimmed.starts_with(b"{")
+                        || trimmed.starts_with(b"[")
+                    {
+                        serde_json::from_slice::<CommandEnvelope>(trimmed)
                             .map_err(|e| anyhow::anyhow!("JSON decode: {e}"))
                     } else {
-                        bincode_next::decode_from_slice::<GameCommand, _>(
-                            payload,
-                            bincode_next::config::standard(),
-                        )
-                        .map(|(v, _)| v)
-                        .map_err(|e| anyhow::anyhow!("Bincode decode: {e}"))
+                        Err(anyhow::anyhow!(
+                            "Bincode decode no longer supported for CommandEnvelope (missing Encode/Decode)"
+                        ))
                     };
 
                     match cmd_res {
-                        Ok(game_command) => {
-                            debug!(group=%group, ?game_command, "received");
+                        Ok(command_envelope) => {
+                            debug!(group=%group, id=%command_envelope.id, "received");
                             // ── Build Acknowledgement Handle ───────────────────────────
                             //
                             // The oneshot sender is captured in a FnOnce closure.
@@ -226,7 +225,13 @@ async fn consumer_loop(cfg: BrokerConfig, group: String, cmd_tx: Sender<BrokerCo
                                 let _ = ack_tx.send(());
                             });
 
-                            if cmd_tx.send(BrokerCommand { game_command, ack }).is_err() {
+                            if cmd_tx
+                                .send(BrokerCommand {
+                                    command_envelope,
+                                    ack,
+                                })
+                                .is_err()
+                            {
                                 warn!(group=%group, "game loop closed");
                                 break;
                             }

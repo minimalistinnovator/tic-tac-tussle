@@ -1,8 +1,10 @@
-use crate::state::{PlayerId, Stage};
+use crate::state::{GameId, PlayerId, Stage};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum TicTacTussleError {
+    #[error("command for game {expected}, but this is game {actual}")]
+    WrongGame { expected: GameId, actual: GameId },
     #[error("expected stage {expected:?}, actual {actual:?}")]
     WrongStage { expected: Stage, actual: Stage },
     #[error("player {0} is not in this game")]

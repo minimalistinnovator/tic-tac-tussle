@@ -71,8 +71,9 @@ fn main() -> Result<()> {
     let publisher = RedpandaPublisher::new(&broker_cfg)?;
     let broadcaster = RenetBroadcaster::new(Arc::clone(&renet));
 
+    let game_id = GameId::new();
     let mut service = GameService::builder()
-        .store(EventStore::new(GameId::new()))
+        .store(EventStore::new(game_id))
         .publisher(publisher)
         .broadcaster(broadcaster)
         .build();
@@ -94,8 +95,8 @@ fn main() -> Result<()> {
                 .context("transport update")?;
         }
 
-        handle_connections(&renet, &mut transport, &mut service);
-        drain_client_commands(&renet, &mut service);
+        handle_connections(&renet, &mut transport, &mut service, game_id);
+        drain_client_commands(&renet, &mut service, game_id);
         drain_broker_commands(&cmd_rx, &mut service);
 
         {
@@ -116,6 +117,7 @@ fn handle_connections(
     renet: &Arc<Mutex<RenetServer>>,
     transport: &mut NetcodeServerTransport,
     service: &mut GameService,
+    game_id: GameId,
 ) {
     let events: Vec<ServerEvent> = {
         let mut srv = renet.lock().expect("poisoned");
@@ -136,7 +138,7 @@ fn handle_connections(
                     player_id: PlayerId(client_id),
                     name,
                 };
-                let cmd_env = CommandEnvelope::new(cmd);
+                let cmd_env = CommandEnvelope::new(game_id, cmd);
                 let _ = service.publish(store::BrokerMessage::Command(cmd_env.clone()));
                 if let Err(e) = service.handle(cmd_env) {
                     warn!(%e, "JoinGame rejected");
@@ -147,7 +149,7 @@ fn handle_connections(
                 let cmd = GameCommand::LeaveGame {
                     player_id: PlayerId(client_id),
                 };
-                let cmd_env = CommandEnvelope::new(cmd);
+                let cmd_env = CommandEnvelope::new(game_id, cmd);
                 let _ = service.publish(store::BrokerMessage::Command(cmd_env.clone()));
                 if let Err(e) = service.handle(cmd_env) {
                     warn!(%e, "LeaveGame rejected");
@@ -156,7 +158,11 @@ fn handle_connections(
         }
     }
 }
-fn drain_client_commands(renet: &Arc<Mutex<RenetServer>>, service: &mut GameService) {
+fn drain_client_commands(
+    renet: &Arc<Mutex<RenetServer>>,
+    service: &mut GameService,
+    game_id: GameId,
+) {
     let messages: Vec<(u64, bytes::Bytes)> = {
         let mut srv = renet.lock().expect("poisoned");
         let ids: Vec<u64> = srv.clients_id().into_iter().collect();
@@ -171,7 +177,7 @@ fn drain_client_commands(renet: &Arc<Mutex<RenetServer>>, service: &mut GameServ
     for (cid, raw) in messages {
         match decode_from_slice::<GameCommand, _>(&raw, config::standard()) {
             Ok((cmd, _)) => {
-                let cmd_env = CommandEnvelope::new(cmd);
+                let cmd_env = CommandEnvelope::new(game_id, cmd);
                 let _ = service.publish(store::BrokerMessage::Command(cmd_env.clone()));
                 if let Err(e) = service.handle(cmd_env) {
                     warn!(%cid, %e, "command rejected");
@@ -184,12 +190,11 @@ fn drain_client_commands(renet: &Arc<Mutex<RenetServer>>, service: &mut GameServ
 fn drain_broker_commands(cmd_rx: &Receiver<BrokerCommand>, service: &mut GameService) {
     loop {
         match cmd_rx.try_recv() {
-            Ok(BrokerCommand { game_command, ack }) => {
-                // Broker commands might already be enveloped if we changed the broker format,
-                // but for now Redpanda adapter still produces raw GameCommand.
-                // We wrap it here to maintain causality in the local store.
-                let cmd_env = CommandEnvelope::new(game_command);
-                match service.handle(cmd_env) {
+            Ok(BrokerCommand {
+                command_envelope,
+                ack,
+            }) => {
+                match service.handle(command_envelope) {
                     Ok(()) => ack.ack(),
                     Err(e) if e.downcast_ref::<TicTacTussleError>().is_some() => {
                         // Domain rule violation — retrying will never succeed.

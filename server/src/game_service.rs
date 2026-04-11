@@ -26,6 +26,13 @@ impl GameService {
 
     /// Hydrate state → decide → append → publish → broadcast.
     pub fn handle(&mut self, cmd_env: CommandEnvelope) -> Result<()> {
+        if cmd_env.game_id != self.store.game_id() {
+            return Err(anyhow::anyhow!(store::TicTacTussleError::WrongGame {
+                expected: cmd_env.game_id,
+                actual: self.store.game_id(),
+            }));
+        }
+
         let state = GameDecider::hydrate(&self.store.events());
         let events =
             GameDecider::decide(&state, &cmd_env.command).map_err(|e| anyhow::anyhow!("{e}"))?;
