@@ -24,4 +24,7 @@ pub use decider::GameDecider;
 
 pub use simulation::SimulationHarness;
 
-pub use ports::{EventPublisher, NetworkBroadcaster};
+pub use ports::{
+    AckHandle, CapturingPublisher, EventPublisher, NetworkBroadcaster, NoopBroadcaster,
+    NoopPublisher, test_ack,
+};

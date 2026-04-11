@@ -23,7 +23,7 @@ use std::net::{SocketAddr, UdpSocket};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 use store::store::EventStore;
-use store::{GameCommand, GameId, PlayerId};
+use store::{GameCommand, GameId, PlayerId, TicTacTussleError};
 use tracing::{info, warn};
 
 mod adapters;
@@ -181,9 +181,19 @@ fn drain_client_commands(renet: &Arc<Mutex<RenetServer>>, service: &mut GameServ
 fn drain_broker_commands(cmd_rx: &Receiver<BrokerCommand>, service: &mut GameService) {
     loop {
         match cmd_rx.try_recv() {
-            Ok(BrokerCommand(cmd)) => {
-                if let Err(e) = service.handle(&cmd) {
-                    warn!(%e, "broker command rejected");
+            Ok(BrokerCommand { game_command, ack }) => {
+                match service.handle(&game_command) {
+                    Ok(()) => ack.ack(),
+                    Err(e) if e.downcast_ref::<TicTacTussleError>().is_some() => {
+                        // Domain rule violation — retrying will never succeed.
+                        // Ack so Redpanda advances past this message.
+                        warn!(%e, "broker command permanently rejected — acking to skip");
+                        ack.ack();
+                    }
+                    Err(e) => {
+                        warn!(%e, "broker command transiently failed — dropping ack for redeliver");
+                        // `ack` is dropped here — adapter sees Err(_) and does NOT commit.
+                    }
                 }
             }
             Err(TryRecvError::Empty) => break,

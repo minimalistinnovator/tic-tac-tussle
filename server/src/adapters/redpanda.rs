@@ -1,9 +1,24 @@
 //! Redpanda adapter — `EventPublisher` + parallel consumer groups.
 //!
+//! Delivery semantics: AT-LEAST-ONCE
+//!
+//! The adapter implements this correctly via the acknowledger pattern:
+//!   1. `enable.auto.commit = false` — offsets never advance on a timer.
+//!   2. Every inbound message is paired with an `AckHandle`.
+//!   3. The game loop calls `ack.ack()` AFTER EventStore append + broadcast.
+//!   4. The consumer commits the offset ONLY after receiving that ack.
+//!   5. On drop-without-ack (processing failure) or timeout, the offset
+//!      stays uncommitted — Redpanda redelivers the message.
+//!
 //! Parallel Receiver Topology:
-//!   Every entry in CONSUMER_GROUPS is an independent Kafka consumer group.
-//!   All groups read the same topic; messages funnel into one crossbeam channel.
-//!   Add an observer: append one string to CONSUMER_GROUPS. Zero other changes.
+//!   Each string in CONSUMER_GROUPS is an independent Kafka consumer group.
+//!   All groups share one crossbeam channel into the game loop.
+//!   Adding an observer = appending one string. Zero other changes.
+//!
+//! Tokio boundary:
+//!   All Tokio types are confined to this adapter.
+//!   `AckHandle` is constructed here via `Box<dyn FnOnce() + Send>` closure —
+//!   the domain crate (`store`) has no knowledge of oneshot channels.
 
 use std::thread;
 use std::time::Duration;
@@ -19,9 +34,13 @@ use rdkafka::consumer::{
 use rdkafka::error::KafkaResult;
 use rdkafka::message::Message;
 use rdkafka::producer::{FutureProducer, FutureRecord};
-use store::{EventPublisher, GameCommand, GameEventEnvelope};
+use store::{AckHandle, EventPublisher, GameCommand, GameEventEnvelope};
 use tokio::runtime::Runtime;
 use tracing::{debug, error, info, warn};
+
+// How long the consumer waits for a game-loop ack before giving up.
+// When timeout occurs, the offset is NOT committed — Redpanda redelivers.
+const ACK_TIMEOUT: Duration = Duration::from_secs(5);
 
 const CONSUMER_GROUPS: &[&str] = &["game-server-loop", "game-audit-log"];
 
@@ -32,7 +51,10 @@ pub struct BrokerConfig {
     pub commands_topic: String,
 }
 
-pub struct BrokerCommand(pub GameCommand);
+pub struct BrokerCommand {
+    pub game_command: GameCommand,
+    pub ack: AckHandle,
+}
 
 // ── Publisher ─────────────────────────────────────────────────────────────────
 
@@ -147,11 +169,14 @@ impl ConsumerContext for LogCtx {
 
 async fn consumer_loop(cfg: BrokerConfig, group: String, cmd_tx: Sender<BrokerCommand>) {
     info!(group=%group, topic=%cfg.commands_topic, "consumer starting");
+    // Offsets are committed manually after the game loop acknowledges each message.
+    // Auto-commit advances the offset on a timer independently of whether
+    // the message was processed — that breaks at-least-once.
     let consumer: StreamConsumer<LogCtx> = ClientConfig::new()
         .set("bootstrap.servers", &cfg.brokers)
         .set("group.id", &group)
         .set("auto.offset.reset", "earliest")
-        .set("enable.auto.commit", "true")
+        .set("enable.auto.commit", "false")
         .set("auto.commit.interval.ms", "1000")
         .set("session.timeout.ms", "6000")
         .create_with_context(LogCtx {
@@ -184,11 +209,49 @@ async fn consumer_loop(cfg: BrokerConfig, group: String, cmd_tx: Sender<BrokerCo
                     };
 
                     match cmd_res {
-                        Ok(cmd) => {
-                            debug!(group=%group, ?cmd, "received");
-                            if cmd_tx.send(BrokerCommand(cmd)).is_err() {
+                        Ok(game_command) => {
+                            debug!(group=%group, ?game_command, "received");
+                            // ── Build Acknowledgement Handle ───────────────────────────
+                            //
+                            // The oneshot sender is captured in a FnOnce closure.
+                            // AckHandle wraps Box<dyn FnOnce() + Send>.
+                            let (ack_tx, ack_rx) = tokio::sync::oneshot::channel::<()>();
+                            let ack = AckHandle::new(move || {
+                                // Fails only if ack_rx was dropped (consumer exited).
+                                let _ = ack_tx.send(());
+                            });
+
+                            if cmd_tx.send(BrokerCommand { game_command, ack }).is_err() {
                                 warn!(group=%group, "game loop closed");
                                 break;
+                            }
+
+                            // ── Wait for ack from game loop ───────────────
+                            let partition = msg.partition();
+                            let offset = msg.offset();
+                            match tokio::time::timeout(ACK_TIMEOUT, ack_rx).await {
+                                // Game loop confirmed: safe to commit.
+                                Ok(Ok(())) => {
+                                    let _ = consumer.commit_message(&msg, CommitMode::Async);
+                                }
+                                // AckHandle dropped without ack() — processing failed.
+                                Ok(Err(_)) => {
+                                    warn!(
+                                        group  = %group,
+                                        offset,
+                                        partition,
+                                        "ack dropped (processing failed) — will redeliver"
+                                    );
+                                }
+                                // Game loop took too long.
+                                Err(_timeout) => {
+                                    warn!(
+                                        group  = %group,
+                                        offset,
+                                        partition,
+                                        "ack timeout — will redeliver"
+                                    );
+                                }
                             }
                         }
                         Err(e) => {
@@ -197,7 +260,6 @@ async fn consumer_loop(cfg: BrokerConfig, group: String, cmd_tx: Sender<BrokerCo
                         }
                     }
                 }
-                let _ = consumer.commit_message(&msg, CommitMode::Async);
             }
             Err(e) => {
                 error!(group=%group, %e, "error");
