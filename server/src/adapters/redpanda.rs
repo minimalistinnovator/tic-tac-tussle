@@ -34,7 +34,7 @@ use rdkafka::consumer::{
 use rdkafka::error::KafkaResult;
 use rdkafka::message::Message;
 use rdkafka::producer::{FutureProducer, FutureRecord};
-use store::{AckHandle, EventPublisher, GameCommand, GameEventEnvelope};
+use store::{AckHandle, BrokerMessage, EventPublisher, GameCommand};
 use tokio::runtime::Runtime;
 use tracing::{debug, error, info, warn};
 
@@ -89,36 +89,41 @@ impl RedpandaPublisher {
 }
 
 impl EventPublisher for RedpandaPublisher {
-    fn publish_batch(&self, envelopes: Vec<GameEventEnvelope>) -> Result<()> {
+    fn publish(&self, msg: BrokerMessage) -> Result<()> {
         self.rt.block_on(async {
-            for env in envelopes {
-                let key = format!("{}/{}", env.game_id, env.sequence);
-                let payload = serde_json::to_vec(&env).context("serialise envelope to JSON")?;
-                let record = FutureRecord::to(&self.events_topic)
-                    .key(&key)
-                    .payload(&payload);
-                match self.producer.send(record, Duration::from_secs(5)).await {
-                    Ok(delivery) => debug!(
-                        seq = env.sequence,
-                        partition = delivery.partition,
-                        offset = delivery.offset,
-                        "published"
-                    ),
-                    Err((e, _)) => error!(%e, "publish failed"),
+            match msg {
+                BrokerMessage::EventBatch(envelopes) => {
+                    for env in envelopes {
+                        let key = format!("{}/{}", env.game_id, env.sequence);
+                        let payload =
+                            serde_json::to_vec(&env).context("serialise envelope to JSON")?;
+                        let record = FutureRecord::to(&self.events_topic)
+                            .key(&key)
+                            .payload(&payload);
+                        match self.producer.send(record, Duration::from_secs(5)).await {
+                            Ok(delivery) => debug!(
+                                id = %env.id,
+                                seq = env.sequence,
+                                partition = delivery.partition,
+                                offset = delivery.offset,
+                                "published"
+                            ),
+                            Err((e, _)) => error!(%e, "publish failed"),
+                        }
+                    }
                 }
-            }
-            Ok(())
-        })
-    }
-
-    fn publish_command(&self, cmd: &GameCommand) -> Result<()> {
-        self.rt.block_on(async {
-            let payload = serde_json::to_vec(cmd).context("serialise command to JSON")?;
-            let record: FutureRecord<(), [u8]> =
-                FutureRecord::to(&self.commands_topic).payload(&payload);
-            match self.producer.send(record, Duration::from_secs(5)).await {
-                Ok(_) => debug!(?cmd, "published command"),
-                Err((e, _)) => error!(%e, "publish command failed"),
+                BrokerMessage::Command(cmd_env) => {
+                    let key = cmd_env.id.to_string();
+                    let payload =
+                        serde_json::to_vec(&cmd_env).context("serialise command to JSON")?;
+                    let record = FutureRecord::to(&self.commands_topic)
+                        .key(&key)
+                        .payload(&payload);
+                    match self.producer.send(record, Duration::from_secs(5)).await {
+                        Ok(_) => debug!(id = %cmd_env.id, "published command"),
+                        Err((e, _)) => error!(%e, "publish command failed"),
+                    }
+                }
             }
             Ok(())
         })

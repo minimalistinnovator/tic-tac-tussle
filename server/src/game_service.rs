@@ -6,7 +6,7 @@
 
 use anyhow::{Context, Result};
 use store::store::EventStore;
-use store::{EventPublisher, GameCommand, GameDecider, NetworkBroadcaster};
+use store::{BrokerMessage, CommandEnvelope, EventPublisher, GameDecider, NetworkBroadcaster};
 use tracing::{debug, info, warn};
 
 pub struct GameService {
@@ -25,15 +25,20 @@ impl GameService {
     }
 
     /// Hydrate state → decide → append → publish → broadcast.
-    pub fn handle(&mut self, cmd: &GameCommand) -> Result<()> {
+    pub fn handle(&mut self, cmd_env: CommandEnvelope) -> Result<()> {
         let state = GameDecider::hydrate(&self.store.events());
-        let events = GameDecider::decide(&state, cmd).map_err(|e| anyhow::anyhow!("{e}"))?;
+        let events =
+            GameDecider::decide(&state, &cmd_env.command).map_err(|e| anyhow::anyhow!("{e}"))?;
 
-        debug!(?cmd, produced = events.len(), "command accepted");
+        debug!(
+            command_id = %cmd_env.id,
+            produced = events.len(),
+            "command accepted"
+        );
 
-        let envelopes = self.store.append_batch(events.clone());
+        let envelopes = self.store.append_batch(events.clone(), Some(cmd_env.id));
 
-        if let Err(e) = self.publisher.publish_batch(envelopes) {
+        if let Err(e) = self.publisher.publish(BrokerMessage::EventBatch(envelopes)) {
             warn!(%e, "broker publish failed (non-fatal)");
         }
 
@@ -55,10 +60,8 @@ impl GameService {
         Ok(())
     }
 
-    pub fn publish_command(&self, cmd: &GameCommand) -> Result<()> {
-        self.publisher
-            .publish_command(cmd)
-            .context("publish_command")
+    pub fn publish(&self, msg: BrokerMessage) -> Result<()> {
+        self.publisher.publish(msg).context("publish")
     }
 }
 

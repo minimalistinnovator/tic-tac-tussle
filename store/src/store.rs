@@ -5,6 +5,7 @@ use crate::events::GameEventEnvelope;
 use crate::state::GameId;
 use std::sync::{Arc, Mutex, MutexGuard};
 use tracing::debug;
+use uuid::Uuid;
 
 struct Inner {
     game_id: GameId,
@@ -46,22 +47,26 @@ impl EventStore {
         self.inner.lock().expect("EventStore poisoned")
     }
 
-    pub fn append(&self, event: GameEvent) -> GameEventEnvelope {
+    pub fn append(&self, event: GameEvent, command_id: Option<Uuid>) -> GameEventEnvelope {
         let mut g = self.lock();
         let seq = g.log.len() as u64;
-        let gee = GameEventEnvelope::new(g.game_id, seq, event);
+        let gee = GameEventEnvelope::new(g.game_id, seq, event, command_id);
         debug!(seq, ?gee.event, "appended");
         g.log.push(gee.clone());
         gee
     }
 
-    pub fn append_batch(&self, events: Vec<GameEvent>) -> Vec<GameEventEnvelope> {
+    pub fn append_batch(
+        &self,
+        events: Vec<GameEvent>,
+        command_id: Option<Uuid>,
+    ) -> Vec<GameEventEnvelope> {
         let mut g = self.lock();
         events
             .into_iter()
             .map(|ev| {
                 let seq = g.log.len() as u64;
-                let env = GameEventEnvelope::new(g.game_id, seq, ev);
+                let env = GameEventEnvelope::new(g.game_id, seq, ev, command_id);
                 debug!(seq, ?env.event, "batch-appended");
                 g.log.push(env.clone());
                 env

@@ -24,6 +24,7 @@ pub enum GameEvent {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GameEventEnvelope {
     pub id: Uuid,
+    pub command_id: Option<Uuid>,
     pub sequence: u64,
     pub game_id: GameId,
     pub occurred_at: DateTime<Utc>,
@@ -31,9 +32,10 @@ pub struct GameEventEnvelope {
 }
 
 impl GameEventEnvelope {
-    pub fn new(game_id: GameId, sequence: u64, event: GameEvent) -> Self {
+    pub fn new(game_id: GameId, sequence: u64, event: GameEvent, command_id: Option<Uuid>) -> Self {
         Self {
             id: Uuid::new_v4(),
+            command_id,
             sequence,
             game_id,
             occurred_at: Utc::now(),

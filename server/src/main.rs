@@ -23,7 +23,7 @@ use std::net::{SocketAddr, UdpSocket};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 use store::store::EventStore;
-use store::{GameCommand, GameId, PlayerId, TicTacTussleError};
+use store::{CommandEnvelope, GameCommand, GameId, PlayerId, TicTacTussleError};
 use tracing::{info, warn};
 
 mod adapters;
@@ -136,8 +136,9 @@ fn handle_connections(
                     player_id: PlayerId(client_id),
                     name,
                 };
-                let _ = service.publish_command(&cmd);
-                if let Err(e) = service.handle(&cmd) {
+                let cmd_env = CommandEnvelope::new(cmd);
+                let _ = service.publish(store::BrokerMessage::Command(cmd_env.clone()));
+                if let Err(e) = service.handle(cmd_env) {
                     warn!(%e, "JoinGame rejected");
                 }
             }
@@ -146,8 +147,9 @@ fn handle_connections(
                 let cmd = GameCommand::LeaveGame {
                     player_id: PlayerId(client_id),
                 };
-                let _ = service.publish_command(&cmd);
-                if let Err(e) = service.handle(&cmd) {
+                let cmd_env = CommandEnvelope::new(cmd);
+                let _ = service.publish(store::BrokerMessage::Command(cmd_env.clone()));
+                if let Err(e) = service.handle(cmd_env) {
                     warn!(%e, "LeaveGame rejected");
                 }
             }
@@ -169,8 +171,9 @@ fn drain_client_commands(renet: &Arc<Mutex<RenetServer>>, service: &mut GameServ
     for (cid, raw) in messages {
         match decode_from_slice::<GameCommand, _>(&raw, config::standard()) {
             Ok((cmd, _)) => {
-                let _ = service.publish_command(&cmd);
-                if let Err(e) = service.handle(&cmd) {
+                let cmd_env = CommandEnvelope::new(cmd);
+                let _ = service.publish(store::BrokerMessage::Command(cmd_env.clone()));
+                if let Err(e) = service.handle(cmd_env) {
                     warn!(%cid, %e, "command rejected");
                 }
             }
@@ -182,7 +185,11 @@ fn drain_broker_commands(cmd_rx: &Receiver<BrokerCommand>, service: &mut GameSer
     loop {
         match cmd_rx.try_recv() {
             Ok(BrokerCommand { game_command, ack }) => {
-                match service.handle(&game_command) {
+                // Broker commands might already be enveloped if we changed the broker format,
+                // but for now Redpanda adapter still produces raw GameCommand.
+                // We wrap it here to maintain causality in the local store.
+                let cmd_env = CommandEnvelope::new(game_command);
+                match service.handle(cmd_env) {
                     Ok(()) => ack.ack(),
                     Err(e) if e.downcast_ref::<TicTacTussleError>().is_some() => {
                         // Domain rule violation — retrying will never succeed.

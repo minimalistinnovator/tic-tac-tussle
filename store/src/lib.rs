@@ -12,7 +12,7 @@ pub mod store;
 
 pub use errors::TicTacTussleError;
 
-pub use commands::GameCommand;
+pub use commands::{CommandEnvelope, GameCommand};
 
 pub use state::{GameId, GameState, PlayerId, PlayerPair, Stage, Symbol, Tile};
 
@@ -25,6 +25,6 @@ pub use decider::GameDecider;
 pub use simulation::SimulationHarness;
 
 pub use ports::{
-    AckHandle, CapturingPublisher, EventPublisher, NetworkBroadcaster, NoopBroadcaster,
-    NoopPublisher, test_ack,
+    AckHandle, BrokerMessage, CapturingPublisher, EventPublisher, NetworkBroadcaster,
+    NoopBroadcaster, NoopPublisher, test_ack,
 };
