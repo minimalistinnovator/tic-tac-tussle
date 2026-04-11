@@ -9,6 +9,7 @@ path = "src/main.rs"
 
 [dependencies]
 serde = { workspace = true }
+serde_json = "1.0"
 bincode-next = { workspace = true }
 anyhow = { workspace = true }
 thiserror = { workspace = true }
@@ -16,6 +17,7 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 uuid = { workspace = true }
+chrono = { workspace = true }
 store = { workspace = true }
 renet = { workspace = true }
 renet_netcode = { workspace = true }

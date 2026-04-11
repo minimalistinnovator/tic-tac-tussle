@@ -54,6 +54,12 @@ impl GameService {
         debug!(%client_id, n = self.store.len(), "catch-up complete");
         Ok(())
     }
+
+    pub fn publish_command(&self, cmd: &GameCommand) -> Result<()> {
+        self.publisher
+            .publish_command(cmd)
+            .context("publish_command")
+    }
 }
 
 // ── Type-state Builder ────────────────────────────────────────────────────────

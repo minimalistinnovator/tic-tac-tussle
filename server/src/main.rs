@@ -136,6 +136,7 @@ fn handle_connections(
                     player_id: PlayerId(client_id),
                     name,
                 };
+                let _ = service.publish_command(&cmd);
                 if let Err(e) = service.handle(&cmd) {
                     warn!(%e, "JoinGame rejected");
                 }
@@ -145,6 +146,7 @@ fn handle_connections(
                 let cmd = GameCommand::LeaveGame {
                     player_id: PlayerId(client_id),
                 };
+                let _ = service.publish_command(&cmd);
                 if let Err(e) = service.handle(&cmd) {
                     warn!(%e, "LeaveGame rejected");
                 }
@@ -167,6 +169,7 @@ fn drain_client_commands(renet: &Arc<Mutex<RenetServer>>, service: &mut GameServ
     for (cid, raw) in messages {
         match decode_from_slice::<GameCommand, _>(&raw, config::standard()) {
             Ok((cmd, _)) => {
+                let _ = service.publish_command(&cmd);
                 if let Err(e) = service.handle(&cmd) {
                     warn!(%cid, %e, "command rejected");
                 }

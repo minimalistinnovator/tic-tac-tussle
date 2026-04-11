@@ -68,7 +68,7 @@ pub enum Stage {
 
 /// Read model: names, symbols, opponent lookup.
 /// NOT stored in GameState. Built by server/client from PlayerJoined events.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, Serialize, Deserialize)]
 pub struct PlayerPair {
     pub x: (PlayerId, String), // first joiner → always X
     pub o: (PlayerId, String), // second joiner → always O
@@ -104,7 +104,7 @@ impl PlayerPair {
 // ── GameState ─────────────────────────────────────────────────────────────────
 
 /// Board layout (row-major):  0|1|2 / 3|4|5 / 6|7|8
-#[derive(Debug, Clone, Default, Encode, Decode)]
+#[derive(Debug, Clone, Default, Encode, Decode, Serialize, Deserialize)]
 pub struct GameState {
     pub stage: Stage,
     pub board: [Tile; 9],

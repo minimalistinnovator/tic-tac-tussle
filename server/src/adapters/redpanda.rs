@@ -9,7 +9,6 @@ use std::thread;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use bincode_next::{config, decode_from_slice};
 use crossbeam_channel::Sender;
 use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, TopicReplication};
 use rdkafka::client::{ClientContext, DefaultClientContext};
@@ -39,7 +38,8 @@ pub struct BrokerCommand(pub GameCommand);
 
 pub struct RedpandaPublisher {
     producer: FutureProducer,
-    topic: String,
+    events_topic: String,
+    commands_topic: String,
     rt: Runtime,
 }
 
@@ -59,7 +59,8 @@ impl RedpandaPublisher {
         ));
         Ok(Self {
             producer,
-            topic: cfg.events_topic.clone(),
+            events_topic: cfg.events_topic.clone(),
+            commands_topic: cfg.commands_topic.clone(),
             rt,
         })
     }
@@ -70,8 +71,10 @@ impl EventPublisher for RedpandaPublisher {
         self.rt.block_on(async {
             for env in envelopes {
                 let key = format!("{}/{}", env.game_id, env.sequence);
-                let payload = env.to_bytes().context("serialise envelope")?;
-                let record = FutureRecord::to(&self.topic).key(&key).payload(&payload);
+                let payload = serde_json::to_vec(&env).context("serialise envelope to JSON")?;
+                let record = FutureRecord::to(&self.events_topic)
+                    .key(&key)
+                    .payload(&payload);
                 match self.producer.send(record, Duration::from_secs(5)).await {
                     Ok(delivery) => debug!(
                         seq = env.sequence,
@@ -81,6 +84,19 @@ impl EventPublisher for RedpandaPublisher {
                     ),
                     Err((e, _)) => error!(%e, "publish failed"),
                 }
+            }
+            Ok(())
+        })
+    }
+
+    fn publish_command(&self, cmd: &GameCommand) -> Result<()> {
+        self.rt.block_on(async {
+            let payload = serde_json::to_vec(cmd).context("serialise command to JSON")?;
+            let record: FutureRecord<(), [u8]> =
+                FutureRecord::to(&self.commands_topic).payload(&payload);
+            match self.producer.send(record, Duration::from_secs(5)).await {
+                Ok(_) => debug!(?cmd, "published command"),
+                Err((e, _)) => error!(%e, "publish command failed"),
             }
             Ok(())
         })
@@ -149,15 +165,36 @@ async fn consumer_loop(cfg: BrokerConfig, group: String, cmd_tx: Sender<BrokerCo
         match consumer.recv().await {
             Ok(msg) => {
                 if let Some(payload) = msg.payload() {
-                    match decode_from_slice::<GameCommand, _>(payload, config::standard()) {
-                        Ok((cmd, _)) => {
+                    let trimmed = payload
+                        .iter()
+                        .position(|&b| !b.is_ascii_whitespace())
+                        .map(|start| &payload[start..])
+                        .unwrap_or(payload);
+
+                    let cmd_res = if trimmed.starts_with(b"{") || trimmed.starts_with(b"[") {
+                        serde_json::from_slice::<GameCommand>(trimmed)
+                            .map_err(|e| anyhow::anyhow!("JSON decode: {e}"))
+                    } else {
+                        bincode_next::decode_from_slice::<GameCommand, _>(
+                            payload,
+                            bincode_next::config::standard(),
+                        )
+                        .map(|(v, _)| v)
+                        .map_err(|e| anyhow::anyhow!("Bincode decode: {e}"))
+                    };
+
+                    match cmd_res {
+                        Ok(cmd) => {
                             debug!(group=%group, ?cmd, "received");
                             if cmd_tx.send(BrokerCommand(cmd)).is_err() {
                                 warn!(group=%group, "game loop closed");
                                 break;
                             }
                         }
-                        Err(e) => warn!(group=%group, %e, "decode error"),
+                        Err(e) => {
+                            let prefix = String::from_utf8_lossy(&payload[..payload.len().min(16)]);
+                            warn!(group=%group, %e, payload_prefix=%prefix, "decode error");
+                        }
                     }
                 }
                 let _ = consumer.commit_message(&msg, CommitMode::Async);
