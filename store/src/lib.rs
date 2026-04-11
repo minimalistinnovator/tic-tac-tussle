@@ -1,4 +1,10 @@
-//! Store crate - the heart of the event sourcing hexagonal architecture
+//! Tic-Tac-Tussle Store
+//!
+//! This crate implements the core domain logic and state management for the Tic-Tac-Tussle game,
+//! following the principles of Hexagonal Architecture and Event Sourcing.
+//!
+//! It is designed to be a pure functional core (in `decider.rs`) surrounded by
+//! ports (in `ports.rs`) that define how it interacts with the outside world.
 
 pub mod board;
 pub mod commands;

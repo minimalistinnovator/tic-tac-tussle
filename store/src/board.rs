@@ -1,6 +1,13 @@
+//! Board logic for Tic-Tac-Toe.
+//!
+//! This module provides functions to check for win conditions and whether
+//! the board is full.
+
 use crate::state::Symbol;
 use crate::state::Tile;
 
+/// All possible winning patterns (3-in-a-row) on a 3x3 grid.
+/// The indices refer to the row-major flat array representation.
 const WIN_PATTERNS: [[usize; 3]; 8] = [
     [0, 1, 2], //rows
     [3, 4, 5], //rows
@@ -12,6 +19,9 @@ const WIN_PATTERNS: [[usize; 3]; 8] = [
     [2, 4, 6], //diagonals
 ];
 
+/// Checks the board for a winning pattern.
+///
+/// Returns `Some(Symbol)` of the winner if a win is found, or `None` otherwise.
 pub fn winning_symbol(board: &[Tile; 9]) -> Option<Symbol> {
     WIN_PATTERNS.iter().find_map(|&[a, b, c]| {
         if let Tile::Occupied(symbol) = board[a] {
@@ -23,6 +33,7 @@ pub fn winning_symbol(board: &[Tile; 9]) -> Option<Symbol> {
     })
 }
 
+/// Checks if the board is completely filled with tiles.
 pub fn is_full(board: &[Tile; 9]) -> bool {
     board.iter().all(|&tile| tile != Tile::Empty)
 }

@@ -1,11 +1,14 @@
-//! GameDecider — the pure functional core.
+//! GameDecider — the pure functional core of the game.
 //!
-//!   decide(state, cmd) → Result<Vec<GameEvent>, DomainError>
-//!   evolve(state, event) → GameState(infallible, clone-and-modify)
-//!   hydrate(events) → GameState(left-fold from default)
+//! This module implements the core business logic of Tic-Tac-Tussle using a pure functional
+//! approach. It follows the "Decider" pattern:
 //!
-//! All domain rules live here and only here.
-//! Zero I/O. Zero side effects. All tests run without infrastructure.
+//! - `decide(state, cmd)`: Validates a command against the current state and produces a list of events.
+//! - `evolve(state, event)`: Applies an event to the current state to produce a new state.
+//! - `hydrate(events)`: Reconstructs the current state by applying a sequence of events from the beginning.
+//!
+//! All domain rules live here and only here. This code is side-effect free and can be tested
+//! without any infrastructure or I/O.
 
 use crate::board::{is_full, winning_symbol};
 use crate::commands::GameCommand;
@@ -15,30 +18,39 @@ use crate::events::GameEvent;
 use crate::state::GameState;
 use crate::state::{PlayerId, Stage, Symbol, Tile};
 
+/// The central component for game logic.
 pub struct GameDecider;
 
 impl GameDecider {
-    // ── decide ────────────────────────────────────────────────────────────────
+    /// Decides which events should be produced in response to a command.
+    ///
+    /// This function is the "brain" of the game. it validates the command against the
+    /// current `GameState` and returns a vector of `GameEvent`s if the command is valid,
+    /// or a `TicTacTussleError` if it is not.
     pub fn decide(
         state: &GameState,
         cmd: &GameCommand,
     ) -> Result<Vec<GameEvent>, TicTacTussleError> {
         match cmd {
             GameCommand::JoinGame { player_id, name } => {
-                // Validation
+                // Validation: Must be in Lobby to join.
                 Self::require_stage(state, Stage::Lobby)?;
+                // Validation: Cannot join twice.
                 if state.players[0] == *player_id || state.players[1] == *player_id {
                     return Err(TicTacTussleError::AlreadyJoined(*player_id));
                 }
+
                 // Event creation
                 let join = GameEvent::PlayerJoined {
                     player_id: *player_id,
                     name: name.clone(),
                 };
+
                 // Speculatively evolve to see if both slots are now filled.
                 let next = Self::evolve(state, &join);
-                // Both slots filled means the second player just joined -> auto-start
-                // players[0] = X, always goes first.
+
+                // Both slots filled means the second player just joined -> auto-start.
+                // Note: players[0] is always X and always goes first.
                 if next.players[1] != PlayerId(0) {
                     Ok(vec![
                         join,
@@ -51,20 +63,26 @@ impl GameDecider {
                 }
             }
             GameCommand::PlaceTile { player_id, at } => {
+                // Validation: Game must be in progress.
                 Self::require_stage(state, Stage::InGame)?;
+                // Validation: Must be the player's turn.
                 if state.active_player_id != *player_id {
                     return Err(TicTacTussleError::NotYourTurn(*player_id));
                 }
+                // Validation: Tile index must be valid.
                 if *at > 8 {
                     return Err(TicTacTussleError::TileOutOfRange(*at));
                 }
+                // Validation: Tile must be empty.
                 if state.board[*at] != Tile::Empty {
                     return Err(TicTacTussleError::TileOccupied(*at));
                 }
+
                 let place = GameEvent::TilePlaced {
                     player_id: *player_id,
                     at: *at,
                 };
+
                 // Speculatively evolve to run win/draw detection on the resulting board.
                 let next = Self::evolve(state, &place);
                 let mut ev = vec![place];
@@ -84,6 +102,7 @@ impl GameDecider {
                 let mut ev = vec![GameEvent::PlayerLeft {
                     player_id: *player_id,
                 }];
+                // If the game was in progress, leaving causes it to end.
                 if state.stage == Stage::InGame {
                     ev.push(GameEvent::GameEnded {
                         reason: EndGameReason::PlayerLeft {
@@ -96,7 +115,10 @@ impl GameDecider {
         }
     }
 
-    // ── evolve ────────────────────────────────────────────────────────────────
+    /// Applies an event to a state to produce a new state.
+    ///
+    /// This function is infallible. It assumes the event is valid (as it should have
+    /// been validated by `decide` before being persisted/emitted).
     pub fn evolve(state: &GameState, event: &GameEvent) -> GameState {
         let mut next = state.clone();
         match event {
@@ -135,15 +157,16 @@ impl GameDecider {
         next
     }
 
-    // ── hydrate ───────────────────────────────────────────────────────────────
-
+    /// Hydrates a `GameState` from a history of events.
+    ///
+    /// This is used to reconstruct the state of a game from its event log.
     pub fn hydrate(events: &[GameEvent]) -> GameState {
         events
             .iter()
             .fold(GameState::default(), |s, e| Self::evolve(&s, e))
     }
 
-    // ── helpers ───────────────────────────────────────────────────────────────
+    /// Helper function to ensure the game is in the expected stage.
     #[inline]
     fn require_stage(
         state: &GameState,
@@ -278,5 +301,45 @@ mod tests {
             s = evs.iter().fold(s, |st, e| GameDecider::evolve(&st, e));
         }
         assert_eq!(s.stage, Stage::Ended);
+    }
+
+    #[test]
+    fn player_leaves_lobby() {
+        let state = GameState::default();
+        let p1 = PlayerId(1);
+        let events = GameDecider::decide(
+            &state,
+            &GameCommand::JoinGame {
+                player_id: p1,
+                name: "Alice".to_string(),
+            },
+        )
+        .unwrap();
+        let state = GameDecider::evolve(&state, &events[0]);
+
+        let leave_events =
+            GameDecider::decide(&state, &GameCommand::LeaveGame { player_id: p1 }).unwrap();
+        assert_eq!(leave_events.len(), 1);
+        assert!(matches!(leave_events[0], GameEvent::PlayerLeft { player_id } if player_id == p1));
+
+        // Ensure it didn't end the game because it wasn't InGame
+        assert!(
+            !leave_events
+                .iter()
+                .any(|e| matches!(e, GameEvent::GameEnded { .. }))
+        );
+    }
+
+    #[test]
+    fn player_leaves_ingame_ends_game() {
+        let (state, p1, _p2) = started();
+        let leave_events =
+            GameDecider::decide(&state, &GameCommand::LeaveGame { player_id: p1 }).unwrap();
+
+        assert_eq!(leave_events.len(), 2);
+        assert!(matches!(leave_events[0], GameEvent::PlayerLeft { player_id } if player_id == p1));
+        assert!(
+            matches!(leave_events[1], GameEvent::GameEnded { reason: EndGameReason::PlayerLeft { player_id: pid } } if pid == p1)
+        );
     }
 }

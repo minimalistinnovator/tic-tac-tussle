@@ -34,3 +34,29 @@ impl NetworkBroadcaster for RenetBroadcaster {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use renet::{ConnectionConfig, RenetServer};
+    use store::state::PlayerId;
+
+    #[test]
+    fn test_renet_broadcaster() {
+        let config = ConnectionConfig::default();
+        let server = RenetServer::new(config);
+        let shared_server = Arc::new(Mutex::new(server));
+        let broadcaster = RenetBroadcaster::new(shared_server.clone());
+
+        let event = GameEvent::TilePlaced {
+            player_id: PlayerId(1),
+            at: 4,
+        };
+
+        // Broadcast (should not panic)
+        assert!(broadcaster.broadcast(&event).is_ok());
+
+        // Send to specific client (should not panic even if client 123 doesn't exist)
+        assert!(broadcaster.send_to(123, &event).is_ok());
+    }
+}

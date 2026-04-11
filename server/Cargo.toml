@@ -8,19 +8,14 @@ name = "server"
 path = "src/main.rs"
 
 [dependencies]
-serde = { workspace = true }
 serde_json = "1.0"
 bincode-next = { workspace = true }
 anyhow = { workspace = true }
-thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
-uuid = { workspace = true }
-chrono = { workspace = true }
 store = { workspace = true }
 renet = { workspace = true }
 renet_netcode = { workspace = true }
 crossbeam-channel = { version = "^0.5.15" }
 rdkafka = { version = "^0.39.0", features = ["cmake-build", "ssl"] }
-bytes = { version = "^1.11.1" }

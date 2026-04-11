@@ -1,11 +1,13 @@
 //! TicTacToe game server — 20 Hz game loop.
 //!
-//! Each tick:
-//!   1. Advance renet clocks; pump UDP.
-//!   2. Handle connect / disconnect.
-//!   3. Drain client GameCommands.
-//!   4. Drain broker GameCommands (parallel consumer groups).
-//!   5. Flush outbound UDP.
+//! The server coordinates the game state between multiple clients and an external
+//! message broker (Redpanda). It runs a fixed-rate loop (20 Hz) to process:
+//!
+//! 1. Network clock synchronization and packet handling via `renet`.
+//! 2. Client connection and disconnection events.
+//! 3. Commands received directly from connected clients.
+//! 4. Commands received from the message broker (potentially from other server instances).
+//! 5. Flushing outbound network packets to clients.
 
 use crate::adapters::redpanda::{
     BrokerCommand, BrokerConfig, RedpandaPublisher, spawn_parallel_consumers,
@@ -29,8 +31,11 @@ use tracing::{info, warn};
 mod adapters;
 mod game_service;
 
+/// The protocol identifier used to ensure clients and servers are compatible.
 const PROTOCOL_ID: u64 = 0x5469_6354_6163;
+/// The maximum number of clients allowed in a single game session.
 const MAX_CLIENTS: usize = 2;
+/// The target duration for each tick of the game loop (20 Hz).
 const TICK: Duration = Duration::from_millis(50);
 
 fn main() -> Result<()> {
@@ -113,6 +118,14 @@ fn main() -> Result<()> {
 
 // ── Game loop steps ───────────────────────────────────────────────────────────
 
+/// Handles new client connections and disconnections.
+///
+/// When a client connects:
+/// 1. A `JoinGame` command is created and processed.
+/// 2. The new client is sent the current game state to catch up.
+///
+/// When a client disconnects:
+/// 1. A `LeaveGame` command is created and processed.
 fn handle_connections(
     renet: &Arc<Mutex<RenetServer>>,
     transport: &mut NetcodeServerTransport,
@@ -158,18 +171,19 @@ fn handle_connections(
         }
     }
 }
+/// Drains and processes commands sent directly from connected clients.
 fn drain_client_commands(
     renet: &Arc<Mutex<RenetServer>>,
     service: &mut GameService,
     game_id: GameId,
 ) {
-    let messages: Vec<(u64, bytes::Bytes)> = {
+    let messages: Vec<(u64, Vec<u8>)> = {
         let mut srv = renet.lock().expect("poisoned");
         let ids: Vec<u64> = srv.clients_id().into_iter().collect();
         let mut msgs = Vec::new();
         for id in ids {
             while let Some(b) = srv.receive_message(id, DefaultChannel::ReliableOrdered) {
-                msgs.push((id, b));
+                msgs.push((id, b.to_vec()));
             }
         }
         msgs
@@ -187,6 +201,11 @@ fn drain_client_commands(
         }
     }
 }
+/// Drains and processes commands received from the message broker.
+///
+/// Successfully processed commands are acknowledged (ACKed) to the broker.
+/// Domain violations are also ACKed to avoid infinite retries of invalid commands.
+/// Transient failures (like network issues) are NOT ACKed, allowing for redelivery.
 fn drain_broker_commands(cmd_rx: &Receiver<BrokerCommand>, service: &mut GameService) {
     loop {
         match cmd_rx.try_recv() {
@@ -218,6 +237,7 @@ fn drain_broker_commands(cmd_rx: &Receiver<BrokerCommand>, service: &mut GameSer
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+/// Extracts the player's name from the `Netcode` user data.
 fn name_from_user_data(ud: &[u8; NETCODE_USER_DATA_BYTES]) -> String {
     let len = u64::from_le_bytes(ud[..8].try_into().unwrap()) as usize;
     let len = len.min(NETCODE_USER_DATA_BYTES - 8);

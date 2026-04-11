@@ -167,6 +167,31 @@ docker compose down -v
 
 ---
 
+## Collaborators
+
+This project is a collaborative effort between its owner and **Junie**, an autonomous AI programmer developed by JetBrains.
+
+Junie's contributions include:
+- Comprehensive documentation and module-level comments across the workspace.
+- Implementation of core domain tests and integration tests for server/client logic.
+- Setting up and optimizing code coverage (via `cargo-tarpaulin`) and CI/CD ready configurations.
+- Refactoring and fixing compilation/dependency issues.
+
+---
+
+## Development Guidelines
+
+- **Pre-commit Hooks**: We use [pre-commit](https://pre-commit.com/) to ensure code quality. Before committing, run `pre-commit run --all-files`.
+  - Current hooks: Formatting (`cargo fmt`), Check (`cargo check`), Linting (`clippy`), and Tests (`cargo test`).
+  - **Note**: Code coverage is intentionally excluded from pre-commit to keep commit times fast.
+- **CI/CD**: Every push and PR triggers a GitHub Actions workflow that:
+  - Verifies code formatting.
+  - Runs `clippy` for linting.
+  - Executes all tests in the workspace.
+  - Generates a code coverage report using `cargo-tarpaulin`.
+
+---
+
 ## Quick Reference Card
 
 ```

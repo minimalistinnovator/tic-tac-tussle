@@ -1,17 +1,12 @@
 //! Tic-tac-tussle Bevy client.
-//!
-//! Architecture:
-//!   - Server is authoritative. Client NEVER self-applies moves.
-//!   - Client sends GameCommand::PlaceTile to server over UDP.
-//!   - Server validates, applies, and broadcasts GameEvent to all clients.
-//!   - Client receives GameEvent, updates local GameState + PlayerPair, re-renders.
-//!
-//! Resources:
-//!   - GameState — write model hydrated from received events
-//!   - PlayerPair — built once both PlayerJoined events arrive
-//!   - LocalPlayerId — this client's PlayerId (set on transport connection)
 
-// ── Constants ─────────────────────────────────────────────────────────────────
+//! The client provides a graphical interface for playing Tic-Tac-Toe. It follows
+//! an authoritative server architecture:
+
+//! - The client NEVER self-applies moves or predicts state.
+//! - Player input (clicks) results in `GameCommand::PlaceTile` being sent to the server.
+//! - The server validates the move and broadcasts a `GameEvent` to all clients.
+//! - The client listens for these events to update its local `GameState` and re-render.
 
 use anyhow::Result;
 use bevy::DefaultPlugins;
@@ -27,41 +22,53 @@ use store::{
     EndGameReason, GameCommand, GameDecider, GameEvent, GameState, PlayerId, PlayerPair, Stage,
     Symbol, Tile,
 };
+
+/// The protocol identifier for network compatibility.
 const PROTOCOL_ID: u64 = 0x5469_6354_6163;
+/// The size of a single cell on the board in pixels.
 const CELL: f32 = 160.0;
+/// The total size of the 3x3 board in pixels.
 const BOARD: f32 = CELL * 3.0;
 
 // ── Resources ─────────────────────────────────────────────────────────────────
 
+/// Resource holding the local player's ID once they are connected.
 #[derive(Resource, Default)]
 struct LocalPlayerId(Option<PlayerId>);
 
-/// Accumulated received events — used to build PlayerPair lazily.
+/// Resource for accumulating received events to build the `PlayerPair` read model.
 #[derive(Resource, Default)]
 struct ReceivedEvents(Vec<GameEvent>);
 
-/// Read model: available once both players have joined.
+/// Resource holding the `PlayerPair` (names and symbols), available once both players have joined.
 #[derive(Resource, Default)]
 struct MaybePair(Option<PlayerPair>);
 
-/// New type wrapper so we can implement `bevy::prelude::Message` on `GameEvent`
-/// without polluting the domain crate with Bevy.
+/// A Bevy `Event` wrapper for the domain `GameEvent`.
 #[derive(Event, Clone, Message)]
 struct BevyGameEvent(GameEvent);
 
+/// A Bevy `Resource` wrapper for the domain `GameState`.
 #[derive(Resource, Default, Deref, DerefMut)]
 struct BevyGameState(GameState);
 
 // ── Components ────────────────────────────────────────────────────────────────
 
+/// Marker component for the status text entity.
 #[derive(Component)]
 struct StatusText;
+
+/// Component for a board cell that can be hovered over.
 #[derive(Component)]
 struct HoverCell(usize);
+
+/// Marker component for rendered X and O pieces.
 #[derive(Component)]
 struct Piece;
 
 // ── Entry point ───────────────────────────────────────────────────────────────
+
+/// The main entry point for the Bevy client.
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
     let username = args.get(1).cloned().unwrap_or_else(|| "Player".into());
@@ -475,4 +482,31 @@ fn build_transport(username: &str, server_addr: &str) -> Result<NetcodeClientTra
         },
         socket,
     )?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use store::state::{PlayerId, Symbol};
+
+    #[test]
+    fn test_cell_pos_calculation() {
+        assert_eq!(cell_pos(0), (-160.0, 160.0)); // Top-left
+        assert_eq!(cell_pos(4), (0.0, 0.0)); // Center
+        assert_eq!(cell_pos(8), (160.0, -160.0)); // Bottom-right
+    }
+
+    #[test]
+    fn test_piece_color_logic() {
+        let me = Some(PlayerId(1));
+        let opp = PlayerId(2);
+
+        // My X should be blue-ish
+        let c1 = piece_color(Some(Symbol::X), PlayerId(1), me);
+        assert!(c1.to_srgba().red < c1.to_srgba().blue);
+
+        // Opponent X should be red-ish
+        let c2 = piece_color(Some(Symbol::X), PlayerId(2), me);
+        assert!(c2.to_srgba().red > c2.to_srgba().blue);
+    }
 }

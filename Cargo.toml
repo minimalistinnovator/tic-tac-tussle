@@ -7,6 +7,14 @@ members = [
     "store"
 ]
 
+[workspace.metadata.tarpaulin]
+all-features = true
+workspace = true
+exclude-files = [
+    "server/src/adapters/redpanda.rs", # Heavy Kafka dependency
+    "client/src/main.rs",             # Heavy Bevy UI dependency
+]
+
 [workspace.dependencies]
 serde = { version = "^1.0.228", features = ["derive"] }
 bincode-next = { version = "2.1.0", features = ["serde", "derive", "alloc"] }
