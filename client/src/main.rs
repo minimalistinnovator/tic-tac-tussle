@@ -499,7 +499,6 @@ mod tests {
     #[test]
     fn test_piece_color_logic() {
         let me = Some(PlayerId(1));
-        let opp = PlayerId(2);
 
         // My X should be blue-ish
         let c1 = piece_color(Some(Symbol::X), PlayerId(1), me);
