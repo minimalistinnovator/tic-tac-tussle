@@ -275,7 +275,7 @@ fn handle_input(
     let wy = window.height() / 2.0 - cursor.y;
 
     let col = ((wx + BOARD / 2.0) / CELL).floor() as isize;
-    let row = (2.0 - (wy + BOARD / 2.0) / CELL).floor() as isize;
+    let row = ((BOARD / 2.0 - wy) / CELL).floor() as isize;
 
     if !(0..3).contains(&col) || !(0..3).contains(&row) {
         return;
@@ -307,15 +307,32 @@ fn render_pieces(
             let symbol = pair.0.as_ref().map(|p| p.symbol_of(player_id));
             let color = piece_color(symbol, player_id, local.0);
             let (x, y) = cell_pos(at);
-            commands.spawn((
-                Sprite {
-                    color,
-                    custom_size: Some(Vec2::splat(CELL * 0.55)),
-                    ..default()
-                },
-                Transform::from_xyz(x, y, 1.0),
-                Piece,
-            ));
+            let symbol_text = match symbol {
+                Some(Symbol::X) => "X",
+                Some(Symbol::O) => "O",
+                _ => "?",
+            };
+            commands
+                .spawn((
+                    Sprite {
+                        color,
+                        custom_size: Some(Vec2::splat(CELL * 0.55)),
+                        ..default()
+                    },
+                    Transform::from_xyz(x, y, 1.0),
+                    Piece,
+                ))
+                .with_children(|parent| {
+                    parent.spawn((
+                        Text2d::new(symbol_text),
+                        TextFont {
+                            font_size: CELL * 0.4,
+                            ..default()
+                        },
+                        TextColor(Color::WHITE),
+                        Transform::from_xyz(0.0, 0.0, 0.1),
+                    ));
+                });
         }
     }
 }
@@ -327,27 +344,24 @@ fn render_hover(
     local: Res<LocalPlayerId>,
     mut q: Query<(&HoverCell, &mut Sprite)>,
 ) {
+    let window = windows.single().expect("primary window missing");
     let is_my_turn = local
         .0
         .map(|id| state.active_player_id == id && state.stage == Stage::InGame)
         .unwrap_or(false);
 
     let hovered = if is_my_turn {
-        windows
-            .single()
-            .expect("primary window missing")
-            .cursor_position()
-            .and_then(|c| {
-                let wx = c.x - BOARD / 2.0;
-                let wy = BOARD / 2.0 - c.y;
-                let col = ((wx + BOARD / 2.0) / CELL).floor() as isize;
-                let row = (2.0 - (wy + BOARD / 2.0) / CELL).floor() as isize;
-                if (0..3).contains(&col) && (0..3).contains(&row) {
-                    Some((row * 3 + col) as usize)
-                } else {
-                    None
-                }
-            })
+        window.cursor_position().and_then(|c| {
+            let wx = c.x - window.width() / 2.0;
+            let wy = window.height() / 2.0 - c.y;
+            let col = ((wx + BOARD / 2.0) / CELL).floor() as isize;
+            let row = ((BOARD / 2.0 - wy) / CELL).floor() as isize;
+            if (0..3).contains(&col) && (0..3).contains(&row) {
+                Some((row * 3 + col) as usize)
+            } else {
+                None
+            }
+        })
     } else {
         None
     };
